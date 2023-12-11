@@ -1,46 +1,90 @@
-fn main() {
-    // Reserves of ETH and USDC in the first exchange
-    let (reserve1_eth, reserve1_usdc) = (3586.0, 6454800.0);
-    // Reserves of ETH and USDC in the second exchange
-    let (reserve2_eth, reserve2_usdc) = (1123.0, 1998940.0);
+use ethers::{
+    contract::abigen,
+    prelude::*,
+    providers::{Http, Provider},
+};
+use std::{error::Error, sync::Arc};
 
-    // Initial amount of ETH
-    let mut amount_eth_start = 0.0;
-    // Amount of ETH to be added in each iteration
-    let amount_eth_increment = 0.00001;
+// Define the contract binding
+abigen!(
+    IUniswapV2Pair,
+    r#"[
+        function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)
+    ]"#,
+);
 
-    // Maximum profit
-    let mut max_profit = 0.0;
+const USDC_DECIMAL: u128 = 1_000_000; // 6 decimals for USDC
+const ETH_DECIMAL: u128 = 1_000_000_000_000_000_000; // 18 decimals for ETH
 
-    // Loop 500,000 times
-    for _ in 0..500000 {
-        // Increase the amount of ETH in each iteration
-        amount_eth_start += amount_eth_increment;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let http_provider = Provider::<Http>::try_from("https://eth.llamarpc.com")?;
+    let shared_provider = Arc::new(http_provider);
 
-        // Calculate the new ETH reserves
-        let new_reserve1_eth = reserve1_eth - amount_eth_start;
-        // Calculate the new USDC reserves and the amount of USDC received
-        let new_reserve1_usdc = (reserve1_eth * reserve1_usdc) / (reserve1_eth + amount_eth_start);
-        let received_usdc = reserve1_usdc - new_reserve1_usdc;
+    // Function to create a Uniswap pair
+    let create_pair = |address: &str| -> Result<Arc<IUniswapV2Pair<Provider<Http>>>, Box<dyn Error>> {
+        let pair_address = address.parse::<Address>()
+            .map_err(|_| "Invalid address for pair")?;
+        Ok(Arc::new(IUniswapV2Pair::new(pair_address, Arc::clone(&shared_provider))))
+    };
 
-        // Calculate the new USDC reserves
-        let new_reserve2_usdc = reserve2_usdc + received_usdc;
-        // Calculate the new ETH reserves and the amount of ETH received
-        let new_reserve2_eth = (reserve2_eth * reserve2_usdc) / (reserve2_usdc + received_usdc);
-        let received_eth = reserve2_eth - new_reserve2_eth;
+    let uniswap_pair = create_pair("0xb4e16d0168e52d35cacd2c6185b44281ec28c9dc")?;
+    let sushiswap_pair = create_pair("0x397ff1542f962076d0bfe58ea045ffa2d347aca0")?;    
 
-        // Calculate the profit
-        let profit = received_eth - amount_eth_start;
+    let print_reserves = |pair: Arc<IUniswapV2Pair<Provider<Http>>>, name: String| async move {
+        let (reserve0, reserve1, _) = pair.get_reserves().call().await?;
+        println!(
+            "Reserves in {} (Token1, Token2): {}, {}",
+            name, reserve0, reserve1
+        );
+        Ok::<_, Box<dyn Error>>((reserve0, reserve1))
+    };
 
-        // If the profit is greater than the current maximum profit, update the maximum profit
-        if profit > max_profit {
-            max_profit = profit;
-        } else {
-            // If the profit stops increasing, stop the loop
-            break;
-        }
+    let (reserves_usdc_uniswap, reserves_weth_uniswap) = print_reserves(uniswap_pair, "Uniswap".to_string()).await?;
+    let (reserves_usdc_sushiswap, reserves_weth_sushiswap) = print_reserves(sushiswap_pair, "Sushiswap".to_string()).await?;
+
+    let calculate_price = |reserves_usdc: u128, reserves_weth: u128| -> f64 {
+        (reserves_usdc as f64 / USDC_DECIMAL as f64) / (reserves_weth as f64 / ETH_DECIMAL as f64)
+    };
+
+    let uniswap_price = calculate_price(reserves_usdc_uniswap, reserves_weth_uniswap);
+    let sushiswap_price = calculate_price(reserves_usdc_sushiswap, reserves_weth_sushiswap);
+    println!(
+        "Uniswap WETH price: {} USDC \nSushiswap WETH price: {} USDC",
+        uniswap_price, sushiswap_price
+    );
+
+    let fee_ratio: f64 = 1.0;
+    if uniswap_price < sushiswap_price {
+        let exchange_amount_uniswap = reserves_weth_uniswap as f64 * reserves_usdc_sushiswap as f64
+            / ((reserves_usdc_sushiswap as f64) + (reserves_usdc_uniswap as f64) * fee_ratio);
+        let exchange_amount_sushiswap =
+            fee_ratio * reserves_usdc_uniswap as f64 * reserves_weth_sushiswap as f64
+                / ((reserves_usdc_sushiswap as f64) + (reserves_usdc_uniswap as f64) * fee_ratio);
+
+        let optimal_delta = (exchange_amount_sushiswap * exchange_amount_uniswap * fee_ratio)
+            .sqrt()
+            - exchange_amount_sushiswap;
+        println!(
+            "Optimal Delta (Buy Uniswap, sell Sushiswap): {} WETH",
+            optimal_delta / fee_ratio / ETH_DECIMAL as f64
+        );
+    } else {
+        let exchange_amount_sushiswap = reserves_weth_sushiswap as f64
+            * reserves_usdc_uniswap as f64
+            / ((reserves_usdc_uniswap as f64) + (reserves_usdc_sushiswap as f64) * fee_ratio);
+        let exchange_amount_uniswap =
+            fee_ratio * reserves_usdc_sushiswap as f64 * reserves_weth_uniswap as f64
+                / ((reserves_usdc_uniswap as f64) + (reserves_usdc_sushiswap as f64) * fee_ratio);
+
+        let optimal_delta = (exchange_amount_uniswap * exchange_amount_sushiswap * fee_ratio)
+            .sqrt()
+            - exchange_amount_uniswap;
+        println!(
+            "Optimal Delta (Buy Sushiswap, sell Uniswap): {} WETH",
+            optimal_delta / fee_ratio / ETH_DECIMAL as f64
+        );
     }
 
-    // Print the maximum profit and the corresponding amount of ETH
-    println!("Maximum profit: {}, Corresponding amount of ETH: {}", max_profit, amount_eth_start);
+    Ok(())
 }
