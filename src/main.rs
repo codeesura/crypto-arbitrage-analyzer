@@ -54,35 +54,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
         uniswap_price, sushiswap_price
     );
 
-    let fee_ratio: f64 = 1.0;
+    let fee_ratio: f64 = 0.997;
     if uniswap_price < sushiswap_price {
         let exchange_amount_uniswap = reserves_weth_uniswap as f64 * reserves_usdc_sushiswap as f64
-            / ((reserves_usdc_sushiswap as f64) + (reserves_usdc_uniswap as f64) * fee_ratio);
-        let exchange_amount_sushiswap =
-            fee_ratio * reserves_usdc_uniswap as f64 * reserves_weth_sushiswap as f64
-                / ((reserves_usdc_sushiswap as f64) + (reserves_usdc_uniswap as f64) * fee_ratio);
-
+            / (reserves_usdc_sushiswap as f64 * fee_ratio + reserves_usdc_uniswap as f64);
+        let exchange_amount_sushiswap = reserves_usdc_uniswap as f64 * reserves_weth_sushiswap as f64
+            / (reserves_usdc_sushiswap as f64 + reserves_usdc_uniswap as f64 * fee_ratio);
+    
         let optimal_delta = (exchange_amount_sushiswap * exchange_amount_uniswap * fee_ratio)
             .sqrt()
             - exchange_amount_sushiswap;
         println!(
             "Optimal Delta (Buy Uniswap, sell Sushiswap): {} WETH",
-            optimal_delta / fee_ratio / ETH_DECIMAL as f64
+            optimal_delta / ETH_DECIMAL as f64
         );
     } else {
-        let exchange_amount_sushiswap = reserves_weth_sushiswap as f64
-            * reserves_usdc_uniswap as f64
-            / ((reserves_usdc_uniswap as f64) + (reserves_usdc_sushiswap as f64) * fee_ratio);
-        let exchange_amount_uniswap =
-            fee_ratio * reserves_usdc_sushiswap as f64 * reserves_weth_uniswap as f64
-                / ((reserves_usdc_uniswap as f64) + (reserves_usdc_sushiswap as f64) * fee_ratio);
-
+        let exchange_amount_sushiswap = reserves_weth_sushiswap as f64 * reserves_usdc_uniswap as f64
+            / (reserves_usdc_uniswap as f64 * fee_ratio + reserves_usdc_sushiswap as f64);
+        let exchange_amount_uniswap = reserves_usdc_sushiswap as f64 * reserves_weth_uniswap as f64
+            / (reserves_usdc_uniswap as f64 + reserves_usdc_sushiswap as f64 * fee_ratio);
+    
         let optimal_delta = (exchange_amount_uniswap * exchange_amount_sushiswap * fee_ratio)
             .sqrt()
             - exchange_amount_uniswap;
         println!(
             "Optimal Delta (Buy Sushiswap, sell Uniswap): {} WETH",
-            optimal_delta / fee_ratio / ETH_DECIMAL as f64
+            optimal_delta / ETH_DECIMAL as f64
         );
     }
 
