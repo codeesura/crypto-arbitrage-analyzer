@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         uniswap_price, sushiswap_price
     );
 
-    let fee_ratio: f64 = 0.997;
+    let fee_ratio: f64 = 0.997; // Uniswap-Sushiswap fixed %0.3 fee (1-r)
     if uniswap_price < sushiswap_price {
         let exchange_amount_uniswap = reserves_weth_uniswap as f64 * reserves_usdc_sushiswap as f64
             / (reserves_usdc_sushiswap as f64 * fee_ratio + reserves_usdc_uniswap as f64);
